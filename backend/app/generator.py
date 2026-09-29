@@ -42,6 +42,17 @@ def _is_google_rate_limit(error: Exception) -> bool:
     return False
 
 
+def _is_google_daily_quota(error: Exception) -> bool:
+    """A daily quota cannot be cleared by the short rate-limit retry."""
+    current: BaseException | None = error
+    while current is not None:
+        message = str(current).lower()
+        if "perday" in message or "requests per day" in message or "daily quota" in message:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def get_chat_model(provider: LLMProvider | None = None, model: str | None = None) -> BaseChatModel:
     """LangChain chat model factory. Supports OpenAI / Anthropic / Gemini."""
     prov = provider or settings.llm_provider
@@ -104,7 +115,8 @@ def generate_manim_code(
             resp = llm.invoke(messages)
             break
         except Exception as exc:
-            if resolved_provider != LLMProvider.google or not _is_google_rate_limit(exc) or attempt == settings.llm_rate_limit_retries:
+            if (resolved_provider != LLMProvider.google or _is_google_daily_quota(exc)
+                    or not _is_google_rate_limit(exc) or attempt == settings.llm_rate_limit_retries):
                 raise
             logger.warning("Gemini quota reached; retrying code generation in %s seconds (%s/%s)",
                            settings.llm_rate_limit_wait_sec, attempt + 1, settings.llm_rate_limit_retries)

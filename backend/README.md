@@ -12,7 +12,7 @@ docker compose up --build
 
 The API listens on port 8000. Docker and a running Docker daemon are required. Set `OPENAI_API_KEY` for OpenAI code generation. Anthropic and Google code generation use their matching keys. The renderer timeout is 300 seconds in the Compose file; change that value alongside `RENDER_TIMEOUT_SEC` if needed.
 
-For Gemini, a temporary 429 quota response makes the API wait 65 seconds and retry code generation up to two times. Set `LLM_RATE_LIMIT_RETRIES` and `LLM_RATE_LIMIT_WAIT_SEC` in `backend/.env` to change those bounds. A quota that remains exhausted still fails the job and reports Google's error.
+For Gemini, a temporary per-minute 429 quota response makes the API wait 65 seconds and retry code generation up to two times. Set `LLM_RATE_LIMIT_RETRIES` and `LLM_RATE_LIMIT_WAIT_SEC` in `backend/.env` to change those bounds. A per-day quota error fails immediately because a short retry cannot clear it.
 
 ## Generate and retrieve
 
