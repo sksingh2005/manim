@@ -1,0 +1,48 @@
+services:
+  api:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    volumes:
+      - manim-jobs:/tmp/manim-jobs
+      - manim-state:/tmp/manim-state
+    depends_on:
+      - renderer
+    restart: unless-stopped
+
+  renderer:
+    build: ./backend
+    command: ["python", "-m", "app.worker"]
+    environment:
+      JOBS_DIR: /tmp/manim-jobs
+      RENDER_TIMEOUT_SEC: 300
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+    volumes:
+      - manim-jobs:/tmp/manim-jobs
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    cpus: 4
+    mem_limit: 8g
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.3
+    profiles: ["reuse"]
+    volumes:
+      - qdrant-data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  manim-jobs:
+  manim-state:
+  qdrant-data:
