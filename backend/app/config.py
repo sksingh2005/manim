@@ -4,6 +4,7 @@ from enum import Enum
 from pathlib import Path
 from tempfile import gettempdir
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +32,8 @@ class Settings(BaseSettings):
     google_api_key: str | None = None  # GOOGLE_API_KEY / GEMINI_API_KEY
     llm_temperature: float = 0.2
     llm_timeout: int = 120
+    llm_rate_limit_retries: int = Field(default=2, ge=0, le=5)
+    llm_rate_limit_wait_sec: int = Field(default=65, ge=1, le=3600)
 
     # Render
     jobs_dir: str = str(Path(gettempdir()) / "manim-jobs")

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+import time
+import logging
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -24,6 +26,20 @@ Hard rules:
 """
 
 CODE_FENCE_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+logger = logging.getLogger(__name__)
+
+
+def _is_google_rate_limit(error: Exception) -> bool:
+    """Recognize Gemini quota errors, including errors wrapped by LangChain."""
+    current: BaseException | None = error
+    while current is not None:
+        if type(current).__name__ == "ResourceExhausted":
+            return True
+        message = str(current).lower()
+        if "429" in message and ("quota" in message or "rate limit" in message):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def get_chat_model(provider: LLMProvider | None = None, model: str | None = None) -> BaseChatModel:
@@ -81,8 +97,19 @@ def generate_manim_code(
     llm = get_chat_model(provider, model)
     system = SYSTEM_PROMPT.format(scene_name=scene_name)
     user = f"Create a Manim scene for this request:\n{prompt.strip()}"
-    resp = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+    messages = [SystemMessage(content=system), HumanMessage(content=user)]
+    resolved_provider = provider or settings.llm_provider
+    for attempt in range(settings.llm_rate_limit_retries + 1):
+        try:
+            resp = llm.invoke(messages)
+            break
+        except Exception as exc:
+            if resolved_provider != LLMProvider.google or not _is_google_rate_limit(exc) or attempt == settings.llm_rate_limit_retries:
+                raise
+            logger.warning("Gemini quota reached; retrying code generation in %s seconds (%s/%s)",
+                           settings.llm_rate_limit_wait_sec, attempt + 1, settings.llm_rate_limit_retries)
+            time.sleep(settings.llm_rate_limit_wait_sec)
     text = resp.content if isinstance(resp.content, str) else str(resp.content)
-    resolved_provider = str((provider or settings.llm_provider).value)
+    resolved_provider = str(resolved_provider.value)
     resolved_model = model or settings.llm_model
     return extract_code(text), resolved_provider, resolved_model
