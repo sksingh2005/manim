@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     qdrant_url: str | None = None
     qdrant_collection: str = "manim_videos"
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "models/gemini-embedding-001"
     similarity_threshold: float = 0.93
 
 

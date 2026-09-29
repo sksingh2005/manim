@@ -1,21 +1,35 @@
-"""Opt-in semantic video reuse through Qdrant and OpenAI embeddings."""
+"""Opt-in semantic video reuse through Qdrant and Gemini embeddings."""
 
 from __future__ import annotations
 
 import uuid
+import os
 
 import httpx
-from langchain_openai import OpenAIEmbeddings
 
 from .config import settings
 
 
 def enabled() -> bool:
-    return bool(settings.qdrant_url and settings.openai_api_key)
+    google_key = settings.google_api_key or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    return bool(settings.qdrant_url and google_key)
 
 
 def _embed(prompt: str) -> list[float]:
-    return OpenAIEmbeddings(model=settings.embedding_model, api_key=settings.openai_api_key).embed_query(prompt)
+    google_key = settings.google_api_key or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not google_key:
+        raise RuntimeError("Set GOOGLE_API_KEY or GEMINI_API_KEY to enable prompt embeddings.")
+    response = httpx.post(
+        f"https://generativelanguage.googleapis.com/v1beta/{settings.embedding_model}:embedContent",
+        headers={"x-goog-api-key": google_key},
+        json={
+            "content": {"parts": [{"text": prompt}]},
+            "taskType": "SEMANTIC_SIMILARITY",
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()["embedding"]["values"]
 
 
 def _collection(vector_size: int) -> str:

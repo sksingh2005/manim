@@ -30,7 +30,7 @@ Set `R2_ENDPOINT_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKE
 
 ## Similar video suggestions
 
-Run `docker compose --profile reuse up --build` and set `QDRANT_URL=http://qdrant:6333` plus `OPENAI_API_KEY`. Qdrant stores embeddings and job IDs. SQLite stores prompts and job metadata. An OpenAI embedding key is needed even when Anthropic or Google generates the code.
+Run `docker compose --profile reuse up --build` and set `QDRANT_URL=http://qdrant:6333` plus `GOOGLE_API_KEY` (or `GEMINI_API_KEY`). Prompt embeddings use Gemini's `models/gemini-embedding-001` model by default, so reuse works with Gemini keys without an OpenAI key. Qdrant stores embeddings and job IDs. SQLite stores prompts and job metadata.
 
 Only requests with `"share_for_reuse":true` are indexed. Call `POST /api/suggestions` with a prompt and quality before generating. It returns up to five completed videos with a similarity score above `SIMILARITY_THRESHOLD`. The user can choose one or proceed to `POST /api/generate`. Similarity alone does not prove that a video answers the new prompt, so the backend does not silently replace a new request with a previous video. The frontend can show the original prompt and preview for this choice.
 
