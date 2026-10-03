@@ -13,6 +13,10 @@
 # testing
 /coverage
 
+# Downloaded videos used for local testing
+/videos/*
+!/videos/.gitkeep
+
 # next.js
 /.next/
 /out/
