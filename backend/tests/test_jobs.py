@@ -69,3 +69,27 @@ def test_completed_worker_result_finishes_job(tmp_path, monkeypatch):
     updated = jobs.get(job["job_id"])
     assert updated["status"] == "succeeded"
     assert updated["video_url"] == f"/api/videos/{job['job_id']}.mp4"
+
+
+def test_retry_reuse_indexes_completed_video_without_rendering(tmp_path, monkeypatch):
+    jobs = JobStore(str(tmp_path / "jobs.sqlite3"))
+    job = jobs.create(prompt="Show a circle", provider="google", model="test", quality="l",
+                      scene_name="GeneratedScene", share_for_reuse=True,
+                      reuse_indexed=False, reuse_error="Earlier embedding error", r2_key=None)
+    jobs.update(job["job_id"], status="succeeded", video_url=f"/api/videos/{job['job_id']}.mp4")
+    published = []
+    monkeypatch.setattr(main, "store", jobs)
+    monkeypatch.setattr(main, "reuse_enabled", lambda: True)
+    monkeypatch.setattr(main, "publish", lambda current: published.append(current["job_id"]))
+
+    client = TestClient(main.app)
+    response = client.post(f"/api/jobs/{job['job_id']}/retry-reuse")
+
+    assert response.status_code == 200
+    assert response.json()["reuse_indexed"] is True
+    assert response.json()["reuse_error"] is None
+    assert published == [job["job_id"]]
+
+    response = client.post(f"/api/jobs/{job['job_id']}/retry-reuse")
+    assert response.status_code == 200
+    assert published == [job["job_id"]]

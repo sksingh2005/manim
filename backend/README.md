@@ -36,6 +36,8 @@ Run `docker compose --profile reuse up --build` and set `QDRANT_URL=http://qdran
 
 Only requests with `"share_for_reuse":true` are indexed. Call `POST /api/suggestions` with a prompt and quality before generating. It returns up to five completed videos with a similarity score above `SIMILARITY_THRESHOLD`. The user can choose one or proceed to `POST /api/generate`. Similarity alone does not prove that a video answers the new prompt, so the backend does not silently replace a new request with a previous video. The frontend can show the original prompt and preview for this choice.
 
+If a video rendered but embedding or Qdrant indexing failed, fix the configuration and call `POST /api/jobs/{job_id}/retry-reuse` with the API key. This indexes the existing completed video without rendering it again. Check `reuse_indexed` and `reuse_error` in the response.
+
 The default similarity threshold is 0.93 and should be measured against real prompts before relying on it. Suggestions are scoped by render quality. Sharing is off by default. Do not enable cross-user reuse for private prompts without adding user accounts, access rules, and a way to withdraw shared videos.
 
 ## Limits

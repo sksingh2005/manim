@@ -121,6 +121,28 @@ def job_status(job_id: str, x_api_key: str | None = Header(default=None)) -> Job
     return JobStatusResponse(**job)
 
 
+@app.post("/api/jobs/{job_id}/retry-reuse", response_model=JobStatusResponse)
+def retry_reuse(job_id: str, x_api_key: str | None = Header(default=None)) -> JobStatusResponse:
+    _check_auth(x_api_key)
+    job = store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job["status"] != "succeeded" or not job["share_for_reuse"]:
+        raise HTTPException(status_code=409, detail="Only completed, shared videos can be indexed for reuse.")
+    if not reuse_enabled():
+        raise HTTPException(status_code=503, detail="Video reuse is not configured.")
+    if job["reuse_indexed"]:
+        return JobStatusResponse(**job)
+    try:
+        publish(job)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        store.update(job_id, reuse_error=error)
+        raise HTTPException(status_code=503, detail=f"Reuse indexing failed: {error}") from exc
+    updated = store.update(job_id, reuse_indexed=True, reuse_error=None)
+    return JobStatusResponse(**updated)
+
+
 @app.get("/api/videos/{job_id}.mp4")
 def get_video(job_id: str, x_api_key: str | None = Header(default=None)):
     _check_auth(x_api_key)
