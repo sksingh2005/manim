@@ -6,24 +6,23 @@ import os
 import re
 import time
 import logging
+from pathlib import Path
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .config import LLMProvider, settings
 
-SYSTEM_PROMPT = """You are an expert Manim Community Edition (python package `manim`) scene author.
-Output ONLY valid Python code, no markdown fences, no explanation.
+SYSTEM_PROMPT_PATH = Path(__file__).parent / "prompts" / "manim_system.txt"
 
-Hard rules:
-1. Use ONLY `from manim import *` plus stdlib `math` / `numpy as np` if needed.
-2. Define exactly ONE Scene subclass. Its name is {scene_name}. It must implement `def construct(self):`.
-3. Keep it short: 1 scene, 5-25 seconds of animation, no external assets, no file I/O, no network.
-4. Never use: os, sys, subprocess, socket, pathlib, shutil, open(), eval, exec, __import__, compile.
-5. Prefer Text over Tex (Tex needs LaTeX). Use Tex only for short math formulas.
-6. End with a clear final frame (no empty fade-out). Use self.wait() appropriately.
-7. Code must run with: `manim render -qm --format=mp4 scene.py {scene_name}`.
-"""
+
+def load_system_prompt(scene_name: str) -> str:
+    """Read the shared teaching and scene-design contract for every generation."""
+    template = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+    if not template.strip() or "{scene_name}" not in template:
+        raise ValueError("Manim system prompt must be nonempty and contain {scene_name}.")
+    # Replace only our token; Python examples and formulas can contain literal braces.
+    return template.replace("{scene_name}", scene_name)
 
 CODE_FENCE_RE = re.compile(r"```(?:python)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 logger = logging.getLogger(__name__)
@@ -105,8 +104,8 @@ def generate_manim_code(
     scene_name: str = "GeneratedScene",
 ) -> tuple[str, str, str]:
     """Returns (code, resolved_provider, resolved_model). Raises on LLM error."""
+    system = load_system_prompt(scene_name)
     llm = get_chat_model(provider, model)
-    system = SYSTEM_PROMPT.format(scene_name=scene_name)
     user = f"Create a Manim scene for this request:\n{prompt.strip()}"
     messages = [SystemMessage(content=system), HumanMessage(content=user)]
     resolved_provider = provider or settings.llm_provider

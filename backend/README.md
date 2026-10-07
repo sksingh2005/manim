@@ -26,6 +26,26 @@ The response contains a `job_id`. Poll `GET /api/jobs/{job_id}` until the status
 
 Jobs that were queued or running when the API stopped resume after it starts again. Failed jobs retain their error in SQLite. The renderer writes results to the shared jobs volume, while SQLite is mounted only in the API container.
 
+## Generation prompt and video quality
+
+`app/prompts/manim_system.txt` is the shared system prompt for Gemini, OpenAI, and Anthropic. Edit this file to change lesson and design instructions. The generator reads it for each new generation and replaces only `{scene_name}`, so Python examples and formulas can keep literal braces. The path is relative to the generator module, independent of the working directory. A missing, empty, or placeholder-free file fails generation before contacting the model. The Dockerfile copies the prompt with `app`; rebuild the API image after editing it. Existing saved scenes and reused videos keep their original code.
+
+The prompt asks for one accurate, scoped lesson across domains, with ordered explanatory beats, measured text and box layouts, clear arrow routes, readable font sizes, explicit animation durations, reading pauses, and a stable takeaway. It specifies a centered content rectangle with padding on all four sides: at least 12% of the frame width on each horizontal side and 12% of the frame height on each vertical side, with a minimum of 0.6 scene units. Titles and captions share this safe rectangle with the diagram. Connectors need clear corridors around boxes and text, separate lanes for return messages, and space between arrowheads, borders, and message labels. Crowded messages should appear sequentially. These margins help landscape playback on different screens; a portrait composition still requires a separate layout. The prompt retains the 5-25 second limit. Dense subjects should become a labeled overview or excerpt, rather than a rushed complete lesson.
+
+These are model instructions, not a guarantee or an automated visual validator. The AST validator checks code structure and obvious unsafe operations. It does not verify the lesson, measure the rendered layout, enforce duration, or inspect transition frames. There is no automatic quality review or render-repair loop. A successful render still needs review before treating it as a correct lesson.
+
+To evaluate a prompt revision, generate and watch videos for several subjects using the same provider, model, and render quality:
+
+- Two-phase commit with a successful decision and the prepared-state blocking limitation.
+- A historical timeline from supplied dates, with events in the correct order.
+- A business process with a decision and its two outcomes.
+- A language example showing a sentence before and after a grammatical change.
+- A scientific mechanism with labeled parts and the direction of cause and effect.
+- A mathematical example with a formula and its interpretation.
+- Long actor names and a dense request that requires shortening the scope.
+
+Check held frames and transitions for clipped or overlapping text, box padding, connector crossings, consistent roles, and captions that match the diagram. Time the complete video, including the final hold, and check that a beginner can read each beat. Check claims against appropriate references and record the original request, generated code, model, prompt revision, and observed problems. The generator tests verify file loading and system-message wiring with mocked models; they do not establish video quality.
+
 ## R2 storage
 
 Set `R2_ENDPOINT_URL`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET` in `backend/.env`. A completed MP4 is uploaded to `videos/{job_id}.mp4`. The API still serves the video through its authenticated route and redirects to a signed R2 URL. If the upload fails, the job is marked failed with the error and the local output remains available on the jobs volume for recovery.
