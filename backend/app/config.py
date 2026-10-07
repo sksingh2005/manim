@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     llm_timeout: int = 120
     llm_rate_limit_retries: int = Field(default=2, ge=0, le=5)
     llm_rate_limit_wait_sec: int = Field(default=65, ge=1, le=3600)
+    planning_repair_attempts: int = Field(default=1, ge=0, le=2)
 
     # Render
     jobs_dir: str = str(Path(gettempdir()) / "manim-jobs")

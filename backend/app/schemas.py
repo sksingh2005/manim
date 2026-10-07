@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from .config import LLMProvider, RenderQuality
+from .planning import LessonPlan, Storyboard
 
 
 class GenerateRequest(BaseModel):
@@ -29,6 +30,9 @@ class JobStatusResponse(BaseModel):
     quality: str
     scene_name: str
     code: str | None = None
+    generation_stage: str | None = None
+    lesson_plan: LessonPlan | None = None
+    storyboard: Storyboard | None = None
     log: str = ""
     error: str | None = None
     video_url: str | None = None

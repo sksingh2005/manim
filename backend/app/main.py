@@ -13,7 +13,8 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 
 from .config import RenderQuality, settings
-from .generator import generate_manim_code
+from .generator import generate_planned_scene
+from .planning import LessonPlan, Storyboard
 from .reuse import enabled as reuse_enabled, suggest, publish
 from .sandbox import validate_manim_code
 from .schemas import (GenerateRequest, GenerateResponse, JobStatusResponse,
@@ -76,11 +77,30 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             code = scene.read_text(encoding="utf-8")
             validate_manim_code(code, req.scene_name)
         else:
-            code, provider, model = generate_manim_code(req.prompt, req.provider, req.model, req.scene_name)
+            saved = store.get(job_id)
+
+            def save_stage(stage: str, value: dict) -> None:
+                temporary = job_dir / f"{stage}.tmp"
+                temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+                os.replace(temporary, job_dir / f"{stage}.json")
+                next_stage = "storyboard" if stage == "lesson_plan" else "coding"
+                store.update(job_id, **{stage: value}, generation_stage=next_stage)
+
+            store.update(job_id, generation_stage="lesson_plan")
+            generated = generate_planned_scene(
+                req.prompt, req.provider, req.model, req.scene_name,
+                lesson_plan=LessonPlan.model_validate(saved["lesson_plan"]) if saved.get("lesson_plan") else None,
+                storyboard=Storyboard.model_validate(saved["storyboard"]) if saved.get("storyboard") else None,
+                on_stage=save_stage,
+            )
+            code, provider, model = generated.code, generated.provider, generated.model
             validate_manim_code(code, req.scene_name)
-            scene.write_text(code, encoding="utf-8")
+            temporary_scene = job_dir / "scene.tmp"
+            temporary_scene.write_text(code, encoding="utf-8")
+            os.replace(temporary_scene, scene)
             store.update(job_id, code=code, provider=provider, model=model)
 
+        store.update(job_id, generation_stage="rendering")
         request = job_dir / "request.json"
         if not request.exists():
             temporary = job_dir / "request.tmp"
@@ -100,7 +120,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
         if not final.exists():
             raise RuntimeError("Render worker reported success without output.mp4.")
         key = upload(job_id, final)
-        job = store.update(job_id, status="succeeded", log=result.get("log", ""),
+        job = store.update(job_id, status="succeeded", generation_stage="completed", log=result.get("log", ""),
                            r2_key=key, video_url=f"/api/videos/{job_id}.mp4")
         try:
             publish(job)

@@ -28,11 +28,23 @@ Jobs that were queued or running when the API stopped resume after it starts aga
 
 ## Generation prompt and video quality
 
-`app/prompts/manim_system.txt` is the shared system prompt for Gemini, OpenAI, and Anthropic. Edit this file to change lesson and design instructions. The generator reads it for each new generation and replaces only `{scene_name}`, so Python examples and formulas can keep literal braces. The path is relative to the generator module, independent of the working directory. A missing, empty, or placeholder-free file fails generation before contacting the model. The Dockerfile copies the prompt with `app`; rebuild the API image after editing it. Existing saved scenes and reused videos keep their original code.
+New API generations use three model stages, with the same provider and model throughout:
+
+1. `app/prompts/lesson_plan_system.txt` produces a structured lesson plan with its audience, objective, scope, facts, assumptions, example, ordered steps, misconceptions, limitations, and takeaway.
+2. `app/prompts/storyboard_system.txt` turns the lesson into exact on-screen words, visible object regions, connector routes, transitions, and reading holds. The backend checks the JSON schema, step coverage and order, final takeaway, proposed geometry, and timing before proceeding.
+3. `app/prompts/manim_system.txt` generates Python from the validated plan and storyboard. The existing AST validator checks that code before the render worker receives it.
+
+The generator reads prompts for each new generation. It replaces only `{scene_name}` in the code prompt, so Python examples and formulas can keep literal braces. Paths are relative to the generator module, independent of the working directory. A missing file, or an empty or placeholder-free code prompt, fails generation before contacting the model. The Dockerfile copies all prompts with `app`; rebuild the API image after editing them. Existing saved scenes and reused videos keep their original code.
+
+Each planning stage gets one repair attempt after a schema or storyboard validation error. Set `PLANNING_REPAIR_ATTEMPTS` to 0-2 to change this bound. Invalid plans fail the job before rendering; they do not silently fall back to direct code generation. Existing Gemini quota retries apply to every stage. Three model calls, plus any repairs or quota retries, cost more and take longer than the original single call.
+
+Validated stages are saved as `lesson_plan.json` and `storyboard.json` in the job directory and in SQLite. `GET /api/jobs/{job_id}` exposes `lesson_plan`, `storyboard`, and `generation_stage`, which advances through `lesson_plan`, `storyboard`, `coding`, `rendering`, and `completed`. A failed job retains the stage and any completed plan for inspection. Jobs interrupted before code generation reuse their saved validated stages on restart. Older jobs can have null planning fields. Plans advance automatically; there is no manual plan-approval or editing UI yet.
 
 The prompt asks for one accurate, scoped lesson across domains, with ordered explanatory beats, measured text and box layouts, clear arrow routes, readable font sizes, explicit animation durations, reading pauses, and a stable takeaway. It specifies a centered content rectangle with padding on all four sides: at least 12% of the frame width on each horizontal side and 12% of the frame height on each vertical side, with a minimum of 0.6 scene units. Titles and captions share this safe rectangle with the diagram. Connectors need clear corridors around boxes and text, separate lanes for return messages, and space between arrowheads, borders, and message labels. Crowded messages should appear sequentially. These margins help landscape playback on different screens; a portrait composition still requires a separate layout. The prompt retains the 5-25 second limit. Dense subjects should become a labeled overview or excerpt, rather than a rushed complete lesson.
 
-These are model instructions, not a guarantee or an automated visual validator. The AST validator checks code structure and obvious unsafe operations. It does not verify the lesson, measure the rendered layout, enforce duration, or inspect transition frames. There is no automatic quality review or render-repair loop. A successful render still needs review before treating it as a correct lesson.
+Storyboard coordinates are fractions of the full frame, centered at the origin. Proposed object, title, caption, and message regions must fit inside the 12% safe margins. The validator rejects crowded regions, unknown arrow endpoints, arrows detached from their actors, connector segments through regions, crossings between connectors, missing lesson steps, insufficient reading holds, and planned durations outside 5-25 seconds. Clearance calculations use the default 16:9 Manim frame. Object regions are conservative rectangles, including labels; this can reject some visually acceptable curved or circular layouts.
+
+These checks validate a proposal, not the rendered video. They do not measure actual font glyphs, inspect intermediate animation frames, confirm that generated code follows every storyboard coordinate, or verify factual claims. The AST validator checks code structure and obvious unsafe operations. There is no rendered-frame review or render-repair loop yet. A successful render still needs review before treating it as a correct lesson.
 
 To evaluate a prompt revision, generate and watch videos for several subjects using the same provider, model, and render quality:
 
@@ -44,7 +56,7 @@ To evaluate a prompt revision, generate and watch videos for several subjects us
 - A mathematical example with a formula and its interpretation.
 - Long actor names and a dense request that requires shortening the scope.
 
-Check held frames and transitions for clipped or overlapping text, box padding, connector crossings, consistent roles, and captions that match the diagram. Time the complete video, including the final hold, and check that a beginner can read each beat. Check claims against appropriate references and record the original request, generated code, model, prompt revision, and observed problems. The generator tests verify file loading and system-message wiring with mocked models; they do not establish video quality.
+Check held frames and transitions for clipped or overlapping text, box padding, connector crossings, consistent roles, and captions that match the diagram. Time the complete video, including the final hold, and check that a beginner can read each beat. Check claims against appropriate references and record the original request, generated code, model, prompt revision, and observed problems. Backend tests exercise stage ordering, bounded repairs, planned geometry and timing, saved-plan resumption, and job-status fields with mocked models and worker results. They do not establish video quality.
 
 ## R2 storage
 
