@@ -153,13 +153,30 @@ TIMING AND SCENE LIFECYCLE
   for 18-25 seconds for an explanation; a simple visual demonstration can be
   shorter. Respect a requested duration within this range. For a longer request,
   teach a clearly labeled excerpt or overview within 25 seconds.
-- Give every self.play an explicit run_time. Use approximately 0.4-0.8 seconds
-  for simple reveals and 0.8-1.4 seconds for meaningful movement. Faster motion
-  must not make the explanation unreadable.
-- After a new caption is fully visible, hold the scene long enough to read it:
-  budget at least max(1.5, new_word_count / 3.0) seconds. Count all newly introduced
-  essential words in that beat, not only the caption. Pause complex diagrams
-  longer. Do not count a text entrance animation as the full reading pause.
+- Give every self.play an explicit run_time. Use 0.4-0.7 seconds for small reveals,
+  highlights, and fades; use 0.8-1.1 seconds for a meaningful arrow or movement.
+  Use smooth easing for object movement and linear motion for travel along an
+  arrow. Group related label/status changes with their action in the same play.
+- Show messages sequentially so the viewer can follow the direction and effect.
+  Flow directly from a message to its effect, without an idle wait in between.
+  Keep a completed arrow visible during the phase's reading hold. Keep unchanged
+  diagram elements visible between beats. Do not flash an arrow and immediately
+  remove it, or clear the whole diagram when only a message or status changes.
+- Before leaving a completed phase, finish its reading hold. Within a phase,
+  connect the small actions without self.wait calls. Fade out obsolete elements
+  over about 0.5 seconds, then reveal the next state. Include
+  both the fade-out and reveal durations in the next beat's animation budget;
+  never add unbudgeted waits or compress both into one fast transition.
+- A lesson phase is a complete conceptual operation, not an individual arrow,
+  label, highlight, or box reveal. Beats sharing lesson_step form one phase.
+  Put a reading pause only after the phase completes, normally 1.5-3.5 seconds.
+  Intermediate beats use no hold. Do not pause before starting the next small
+  action. Show the phase caption with its actions so viewers can read as it unfolds.
+  Keep essential text visible until the phase ends. Keep captions to roughly
+  6-12 words; simplify a dense phase rather than adding a long idle delay.
+  If a validated storyboard is provided, follow its exact play and hold budgets;
+  hold_seconds=0 means omit self.wait entirely. Include the title reveal in the
+  first beat's budget, alongside the setup, with no standalone title wait.
 - Budget actual timeline duration. Parallel animations inside one play share its
   duration; successive plays and waits add up. Account for AnimationGroup or
   LaggedStart timing. If the budget exceeds 25 seconds, cut scope or words rather

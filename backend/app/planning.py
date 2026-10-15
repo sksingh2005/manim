@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import json
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -82,8 +83,8 @@ class Beat(PlanModel):
     objects: list[VisualObject] = Field(min_length=1, max_length=6)
     connectors: list[Connector] = Field(max_length=5)
     transition: Literal["reveal", "fade", "highlight"]
-    animation_seconds: float = Field(ge=0.4, le=2)
-    hold_seconds: float = Field(ge=1.5, le=12)
+    animation_seconds: float = Field(ge=0.4, le=6)
+    hold_seconds: float = Field(ge=0, le=12)
 
 
 class Storyboard(PlanModel):
@@ -95,6 +96,36 @@ class Storyboard(PlanModel):
 
 # Convert normalized coordinates to default Manim scene units for clearance.
 FRAME_W, FRAME_H = 128 / 9, 8.0
+
+
+def parse_storyboard(raw: str) -> Storyboard:
+    """Clamp well-formed region centers to the safe frame before schema checks.
+
+    Oversized regions and malformed values still fail. Shifting a center can
+    introduce a collision, so callers must normalize and validate the full board.
+    """
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        return Storyboard.model_validate(data)
+    regions = [data.get("title_region"), data.get("caption_region")]
+    if isinstance(data.get("beats"), list):
+        for beat in data["beats"]:
+            if not isinstance(beat, dict):
+                continue
+            for key, region_key in (("objects", "region"), ("connectors", "label_region")):
+                if isinstance(beat.get(key), list):
+                    regions.extend(item.get(region_key) for item in beat[key] if isinstance(item, dict))
+    for region in regions:
+        if not isinstance(region, dict):
+            continue
+        for axis, dimension in (("x", "width"), ("y", "height")):
+            center, size = region.get(axis), region.get(dimension)
+            if (type(center) in (int, float) and type(size) in (int, float)
+                    and math.isfinite(center) and math.isfinite(size)
+                    and -0.5 <= center <= 0.5 and 0 < size <= 0.76):
+                limit = 0.38 - size / 2
+                region[axis] = max(-limit, min(limit, center))
+    return Storyboard.model_validate(data)
 
 
 def _bounds(region: Rect, padding: float = 0) -> tuple[float, float, float, float]:
@@ -141,6 +172,250 @@ def _segments_cross(a: Point, b: Point, c: Point, d: Point) -> bool:
     return side(a, b, c) * side(a, b, d) <= 1e-12 and side(c, d, a) * side(c, d, b) <= 1e-12
 
 
+def place_message_labels(board: Storyboard) -> Storyboard:
+    """Find nearby free label positions jointly, without changing their text.
+
+    Search is bounded. Impossible assignments remain invalid for model repair.
+    All routes and object regions are obstacles, including each label's route.
+    """
+    result = board.model_copy(deep=True)
+    for beat in result.beats:
+        obstacles = [result.title_region, result.caption_region]
+        obstacles += [obj.region for obj in beat.objects]
+        segments = [(a, b) for c in beat.connectors
+                    for a, b in zip(c.points, c.points[1:])]
+
+        def free(region):
+            return (not any(_overlap(region, other) for other in obstacles)
+                    and not any(_segment_hits(a, b, region) for a, b in segments))
+
+        originals = [c.label_region for c in beat.connectors]
+        if (all(free(r) for r in originals) and not any(
+                _overlap(a, b) for i, a in enumerate(originals) for b in originals[i + 1:])):
+            continue
+        options = []
+        for connector in beat.connectors:
+            original = connector.label_region
+            candidates = {}
+
+            def add(x, y):
+                if (abs(x) + original.width / 2 > 0.38
+                        or abs(y) + original.height / 2 > 0.38):
+                    return
+                region = Rect(x=x, y=y, width=original.width, height=original.height)
+                if free(region):
+                    candidates[(x, y)] = region
+
+            add(original.x, original.y)
+            for distance in (0.04, 0.1, 0.2, 0.4, 0.6, 0.8):
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1),
+                               (1, 1), (1, -1), (-1, 1), (-1, -1)):
+                    add(original.x + dx * distance / FRAME_W, original.y + dy * distance / FRAME_H)
+            for a, b in zip(connector.points, connector.points[1:]):
+                dx, dy = (b.x - a.x) * FRAME_W, (b.y - a.y) * FRAME_H
+                length = math.hypot(dx, dy)
+                if length < 0.05:
+                    continue
+                nx, ny = -dy / length, dx / length
+                offset = (abs(nx) * original.width * FRAME_W
+                          + abs(ny) * original.height * FRAME_H) / 2 + 0.18
+                for fraction in (0.5, 0.25, 0.75):
+                    for extra in (0.0, 0.2, 0.4, 0.6, 0.8):
+                        for sign in (1, -1):
+                            add(a.x + (b.x - a.x) * fraction + sign * nx * (offset + extra) / FRAME_W,
+                                a.y + (b.y - a.y) * fraction + sign * ny * (offset + extra) / FRAME_H)
+
+            # Include narrow gaps missed by offsets beside a segment. Keep grid
+            # candidates near this connector, rather than moving labels anywhere.
+            def near_route(x, y):
+                for a, b in zip(connector.points, connector.points[1:]):
+                    ax, ay = a.x * FRAME_W, a.y * FRAME_H
+                    dx, dy = (b.x - a.x) * FRAME_W, (b.y - a.y) * FRAME_H
+                    length_sq = dx * dx + dy * dy
+                    if length_sq < 0.0025:
+                        continue
+                    t = max(0.0, min(1.0, ((x - ax) * dx + (y - ay) * dy) / length_sq))
+                    if math.hypot(x - ax - t * dx, y - ay - t * dy) <= 2.0:
+                        return True
+                return False
+
+            left = (-0.38 + original.width / 2) * FRAME_W
+            bottom = (-0.38 + original.height / 2) * FRAME_H
+            right, top = -left, -bottom
+            for xi in range(max(0, int((right - left) / 0.35)) + 1):
+                for yi in range(max(0, int((top - bottom) / 0.25)) + 1):
+                    x, y = left + xi * 0.35, bottom + yi * 0.25
+                    if near_route(x, y):
+                        add(x / FRAME_W, y / FRAME_H)
+            options.append(sorted(candidates.values(), key=lambda r: math.hypot(
+                (r.x - original.x) * FRAME_W, (r.y - original.y) * FRAME_H))[:48])
+
+        # Other misplaced labels must not block a valid joint assignment.
+        order = sorted(range(len(options)), key=lambda i: len(options[i]))
+        chosen = {}
+        remaining = 5000
+
+        def assign(depth):
+            nonlocal remaining
+            if depth == len(order):
+                return True
+            index = order[depth]
+            for region in options[index]:
+                if remaining <= 0:
+                    return False
+                remaining -= 1
+                if any(_overlap(region, other) for other in chosen.values()):
+                    continue
+                chosen[index] = region
+                if assign(depth + 1):
+                    return True
+                del chosen[index]
+            return False
+
+        if assign(0):
+            for index, region in chosen.items():
+                beat.connectors[index].label_region = region
+    return result
+
+
+def _minimum_timings(board: Storyboard) -> list[tuple[float, float]]:
+    timings = []
+    previous_words: set[tuple[str, str]] = set()
+    previous_caption = ""
+    phase_words = 0
+    phase_reading_time = 0.0
+    phase_messages: set[tuple[str, str, str]] = set()
+    for index, beat in enumerate(board.beats):
+        animation = max(0.5, 0.85 * len(beat.connectors))
+        if beat.transition == "fade":
+            animation = 1.0 + 0.85 * len(beat.connectors)
+        elif beat.transition == "reveal":
+            animation = 0.6 + 0.85 * len(beat.connectors)
+        words = len(beat.caption.split()) if beat.caption != previous_caption else 0
+        if index == 0:
+            words += len(board.title.split())
+        current_words = {(obj.id, obj.text) for obj in beat.objects}
+        words += sum(len(text.split()) for _, text in current_words - previous_words)
+        messages = {(c.source, c.target, c.label) for c in beat.connectors}
+        words += sum(len(label.split()) for _, _, label in messages - phase_messages)
+        phase_messages.update(messages)
+        phase_words += words
+        # Captions/labels appear with the actions; some reading happens during
+        # the animation. Clearing the old frame contributes no reading time.
+        phase_reading_time += 0.75 * (animation - (1.0 if beat.transition == "fade" else 0.0))
+        final = index == len(board.beats) - 1
+        phase_end = final or board.beats[index + 1].lesson_step != beat.lesson_step
+        hold = 0.0
+        if phase_end:
+            hold = max(2.5 if final else 1.5, phase_words / 3.5 - phase_reading_time)
+            phase_words, phase_reading_time = 0, 0.0
+            phase_messages.clear()
+        timings.append((animation, hold))
+        previous_words, previous_caption = current_words, beat.caption
+    return timings
+
+
+def route_connectors(board: Storyboard) -> Storyboard:
+    """Repair obstructed routes using a finite set of ports and orthogonal lanes.
+
+    Routes retain source, target and label. Leave impossible routes unchanged
+    for full validation and model repair; never remove a relationship to fit.
+    """
+    result = board.model_copy(deep=True)
+    for beat in result.beats:
+        objects = {obj.id: obj for obj in beat.objects}
+        regions = [result.title_region, result.caption_region]
+        regions += [obj.region for obj in beat.objects]
+        regions += [c.label_region for c in beat.connectors]
+
+        def ports(region):
+            left, bottom, right, top = _bounds(region)
+            values = []
+            for fraction in (0.5, 0.25, 0.75):
+                x, y = left + (right - left) * fraction, bottom + (top - bottom) * fraction
+                values += [(left - 0.2, y), (right + 0.2, y),
+                           (x, bottom - 0.2), (x, top + 0.2)]
+            return [(x / FRAME_W, y / FRAME_H) for x, y in values
+                    if abs(x / FRAME_W) <= 0.38 and abs(y / FRAME_H) <= 0.38]
+
+        def near(point, region):
+            left, bottom, right, top = _bounds(region)
+            x, y = point.x * FRAME_W, point.y * FRAME_H
+            distance = math.hypot(max(left - x, 0, x - right), max(bottom - y, 0, y - top))
+            return 0.15 - 1e-9 <= distance <= 0.6
+
+        # Lanes just beyond padded obstacle edges, plus the proposed coordinates.
+        xs, ys = {0.0}, {0.0}
+        for region in regions:
+            left, bottom, right, top = _bounds(region, 0.18)
+            xs.update((left / FRAME_W, right / FRAME_W))
+            ys.update((bottom / FRAME_H, top / FRAME_H))
+        xs = sorted(x for x in xs if abs(x) <= 0.38)
+        ys = sorted(y for y in ys if abs(y) <= 0.38)
+        for index, connector in enumerate(beat.connectors):
+            if (connector.source not in objects or connector.target not in objects
+                    or connector.source == connector.target):
+                continue
+            other_segments = [(a, b) for i, c in enumerate(beat.connectors) if i != index
+                              for a, b in zip(c.points, c.points[1:])]
+
+            def clear(points):
+                for a, b in zip(points, points[1:]):
+                    if math.hypot((b.x - a.x) * FRAME_W, (b.y - a.y) * FRAME_H) < 0.05:
+                        return False
+                    if any(_segment_hits(a, b, region) for region in regions):
+                        return False
+                    if any(_segments_cross(a, b, c, d) for c, d in other_segments):
+                        return False
+                return True
+
+            if (clear(connector.points)
+                    and near(connector.points[0], objects[connector.source].region)
+                    and near(connector.points[-1], objects[connector.target].region)):
+                continue
+            best, best_cost = None, float("inf")
+            for sx, sy in ports(objects[connector.source].region):
+                for tx, ty in ports(objects[connector.target].region):
+                    routes = [[(sx, sy), (tx, ty)],
+                              [(sx, sy), (sx, ty), (tx, ty)],
+                              [(sx, sy), (tx, sy), (tx, ty)]]
+                    routes += [[(sx, sy), (x, sy), (x, ty), (tx, ty)] for x in xs]
+                    routes += [[(sx, sy), (sx, y), (tx, y), (tx, ty)] for y in ys]
+                    for route in routes:
+                        compact = []
+                        for x, y in route:
+                            if not compact or (x, y) != (compact[-1].x, compact[-1].y):
+                                compact.append(Point(x=x, y=y))
+                        if len(compact) < 2:
+                            continue
+                        cost = sum(math.hypot((b.x - a.x) * FRAME_W, (b.y - a.y) * FRAME_H)
+                                   for a, b in zip(compact, compact[1:])) + 0.25 * (len(compact) - 2)
+                        if cost < best_cost and clear(compact):
+                            best, best_cost = compact, cost
+            if best is not None:
+                connector.points = best
+    return result
+
+
+def prepare_storyboard(board: Storyboard) -> Storyboard:
+    """Repair routes, label placement and timing floors before full validation."""
+    result = place_message_labels(route_connectors(place_message_labels(board)))
+    timings = []
+    for index, (beat, (animation, hold)) in enumerate(zip(result.beats, _minimum_timings(result))):
+        # Bound overlong model allocations as well as raising short ones.
+        # Full reading pauses belong at phase boundaries, not each small action.
+        animation_seconds = max(animation, min(beat.animation_seconds, animation + 0.35))
+        # Short pauses are a target, not a text-density gate. A completed phase
+        # may need more reading time; retain the total 25s and per-beat limits.
+        hold_seconds = max(hold, min(beat.hold_seconds, hold + 0.5)) if hold else 0.0
+        timings.append((animation_seconds, hold_seconds))
+    if sum(animation + hold for animation, hold in timings) <= 25 and all(
+            animation <= 6 and hold <= 12 for animation, hold in timings):
+        for beat, (animation, hold) in zip(result.beats, timings):
+            beat.animation_seconds, beat.hold_seconds = animation, hold
+    return result
+
+
 def validate_storyboard(board: Storyboard, lesson: LessonPlan) -> None:
     """Validate proposed geometry and timing, not rendered text or factual claims."""
     if _overlap(board.title_region, board.caption_region):
@@ -153,9 +428,13 @@ def validate_storyboard(board: Storyboard, lesson: LessonPlan) -> None:
     total = sum(beat.animation_seconds + beat.hold_seconds for beat in board.beats)
     if not 5 <= total <= 25:
         raise ValueError(f"Storyboard duration {total:.2f}s is outside 5-25 seconds")
-    previous_words: set[tuple[str, str]] = set()
-    previous_caption = ""
-    for index, beat in enumerate(board.beats):
+    for index, (beat, (minimum_animation, minimum_hold)) in enumerate(
+            zip(board.beats, _minimum_timings(board))):
+        if minimum_hold == 0 and beat.hold_seconds > 0.35:
+            raise ValueError(f"Beat {index}: intermediate action must flow into the next action; "
+                             "reserve reading holds for the end of this lesson_step phase")
+        if beat.animation_seconds + 1e-9 < minimum_animation:
+            raise ValueError(f"Beat {index}: animation needs at least {minimum_animation:.2f}s for its transitions and arrows")
         objects = {obj.id: obj for obj in beat.objects}
         if len(objects) != len(beat.objects):
             raise ValueError(f"Beat {index}: object IDs must be unique")
@@ -165,17 +444,14 @@ def validate_storyboard(board: Storyboard, lesson: LessonPlan) -> None:
         for i, (name, region) in enumerate(regions):
             for other_name, other in regions[i + 1:]:
                 if _overlap(region, other):
-                    raise ValueError(f"Beat {index}: {name} overlaps or crowds {other_name}")
-        words = len(beat.caption.split()) if beat.caption != previous_caption else 0
-        if index == 0:
-            words += len(board.title.split())
-        current_words = {(obj.id, obj.text) for obj in beat.objects}
-        words += sum(len(text.split()) for _, text in current_words - previous_words)
-        words += sum(len(c.label.split()) for c in beat.connectors)
-        minimum_hold = max(1.5, words / 3, 2.5 if index == len(board.beats) - 1 else 0)
+                    raise ValueError(
+                        f"Beat {index}: {name} overlaps or crowds {other_name}. "
+                        f"Normalized bounds (left, bottom, right, top): {name}={region.bounds}, "
+                        f"{other_name}={other.bounds}. Leave 0.25 scene units between regions; "
+                        "move the message beside its route within the diagram area or simplify this beat."
+                    )
         if beat.hold_seconds + 1e-9 < minimum_hold:
             raise ValueError(f"Beat {index}: reading hold needs at least {minimum_hold:.2f}s")
-        previous_words, previous_caption = current_words, beat.caption
         for i, connector in enumerate(beat.connectors):
             for other in beat.connectors[i + 1:]:
                 for a, b in zip(connector.points, connector.points[1:]):

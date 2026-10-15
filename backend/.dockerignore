@@ -1,0 +1,11 @@
+# Send only runtime source, prompts, and dependency manifests to Docker.
+# In particular, exclude .env files, tests, virtualenvs, caches, and rendered media.
+**
+!Dockerfile
+!requirements.txt
+!requirements/
+!requirements/*.txt
+!app/
+!app/*.py
+!app/prompts/
+!app/prompts/*.txt

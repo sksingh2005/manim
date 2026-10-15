@@ -40,8 +40,8 @@ def board(lesson):
         "caption_region": {"x": 0, "y": -0.31, "width": 0.70, "height": 0.12},
         "beats": [
             {"lesson_step": 0, "caption": "First ask for a vote", "objects": objects,
-             "connectors": [connector], "transition": "reveal", "animation_seconds": 0.8, "hold_seconds": 4.5},
+             "connectors": [connector], "transition": "reveal", "animation_seconds": 1.6, "hold_seconds": 2.8},
             {"lesson_step": 1, "caption": lesson.takeaway, "objects": objects,
-             "connectors": [connector], "transition": "highlight", "animation_seconds": 0.8, "hold_seconds": 3},
+             "connectors": [connector], "transition": "highlight", "animation_seconds": 1.0, "hold_seconds": 2.5},
         ],
     })

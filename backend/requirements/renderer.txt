@@ -1,0 +1,2 @@
+-r common.txt
+manim==0.19.0

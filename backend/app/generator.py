@@ -15,7 +15,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .config import LLMProvider, settings
-from .planning import LessonPlan, Storyboard, validate_storyboard
+from .planning import LessonPlan, Storyboard, parse_storyboard, prepare_storyboard, validate_storyboard
 
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "prompts" / "manim_system.txt"
 
@@ -126,6 +126,11 @@ def generate_manim_code(
             " title and caption to their reserved regions. Connector points specify complete"
             " routes; draw segments and an arrowhead on the final segment. Respect the total"
             " animation_seconds for all plays in each beat and hold_seconds after them."
+            "\nBeats sharing lesson_step belong to ONE phase: flow between their actions"
+            " without extra self.wait calls. A zero hold_seconds means no wait. Pause only"
+            " after the last beat of a phase. Introduce captions with the actions so they"
+            " can be read during the animation; do not add a separate title pause or waits"
+            " between an arrow and its status change."
             "\nFit actual rendered text in its region without shrinking below minimum font size."
             " Clear old connectors and labels before transitions; use fades rather than moving"
             " through occupied areas. Recheck measured bounds. Code only."
@@ -161,7 +166,7 @@ def _invoke_text(llm: BaseChatModel, messages: list, resolved_provider: LLMProvi
     return "\n".join(parts)
 
 
-def _structured_stage(llm, provider, system, user, schema, check=None):
+def _structured_stage(llm, provider, system, user, schema, check=None, normalize=None, parse=None):
     """Parse a planning stage and allow a bounded repair of invalid proposals."""
     messages = [SystemMessage(content=system), HumanMessage(content=(
         user + "\nReturn a JSON object matching this schema, without Markdown:\n"
@@ -172,7 +177,9 @@ def _structured_stage(llm, provider, system, user, schema, check=None):
         try:
             # JSON fences are tolerated, but explanations or missing fields are not.
             candidate = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip(), flags=re.IGNORECASE)
-            result = schema.model_validate_json(candidate)
+            result = parse(candidate) if parse else schema.model_validate_json(candidate)
+            if normalize is not None:
+                result = normalize(result)
             if check is not None:
                 check(result)
             return result
@@ -231,6 +238,8 @@ def generate_planned_scene(
             llm, resolved_provider, storyboard_system + "\n" + design_rules,
             f"User request:\n{prompt.strip()}\nLesson plan:\n{lesson_plan.model_dump_json()}",
             Storyboard, lambda board: validate_storyboard(board, lesson_plan),
+            normalize=prepare_storyboard,
+            parse=parse_storyboard,
         )
     else:
         validate_storyboard(storyboard, lesson_plan)
