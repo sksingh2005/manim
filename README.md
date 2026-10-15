@@ -1,27 +1,109 @@
 # Forma
 
-Forma turns a written request into a short explanatory animation. The landing page introduces the product with a circle-to-wave motion study. The studio at `/studio` lets you create, preview, and download a video, with optional settings and lesson details collapsed. The shared dark theme and brand guidelines are recorded in [DESIGN.md](DESIGN.md).
+Forma turns a written idea into a short animated explainer video. Describe what you want to teach, and Forma plans the lesson, builds a storyboard, and renders an animation you can preview and download.
 
-The backend accepts a prompt, asks an LLM for a Manim scene, and queues it for an isolated renderer container. It stores job status in SQLite and the MP4 on a Docker volume. Cloudflare R2 storage and Qdrant video suggestions can be enabled separately. A user must opt in before their video is indexed for reuse, and another user chooses whether a suggested video fits their request.
+It is built for educators, students, and creators who want to explain concepts visually without writing animation code.
 
-See [backend/README.md](backend/README.md) for setup, API requests, storage, reuse, and current limits.
+## What it does
 
-## Run the website locally
+- Creates short explanatory animations from a text prompt.
+- Plans the explanation and scene sequence before generating animation code.
+- Shows generation progress and lets you preview and download the finished MP4.
+- Supports 480p, 720p, and 1080p output in the studio.
+- Saves job progress so you can reopen a video using its page URL.
+- Optionally finds similar shared videos with Qdrant and stores finished videos in Cloudflare R2.
 
-1. Configure and start the backend using [backend/README.md](backend/README.md).
-2. Copy the root `.env.example` to `.env.local`. Set `MANIM_API_URL` to the API address and `MANIM_API_KEY` to the backend's `API_KEY`, if set. These are server settings. Do not prefix keys with `NEXT_PUBLIC_`. Restart Next.js after changing them.
-3. Install dependencies with `pnpm install`, then run `pnpm dev --hostname 127.0.0.1`.
-4. Open `http://127.0.0.1:3000`, then choose Open studio. Existing `/?job=...` links redirect to `/studio?job=...`.
+For example, ask: "Explain the Pythagorean theorem using a 3-4-5 triangle and squares on each side."
 
-The browser uses `/api/backend/...` on the same origin. Next.js forwards only the supported API routes and adds the backend key on the server, so no CORS configuration or browser key entry is needed. MP4s stream through this route with byte-range support for seeking. R2 redirects are fetched without the backend key.
+## How it works
 
-Enter one focused request and select 480p, 720p, or 1080p. The form stays locked while that job is active. The page URL records its job ID so a refresh resumes status checks. Temporary status errors retry automatically; failed jobs show their error and unlock the form. The finished video includes its original request, plan, and storyboard when available. Older jobs without planning data still work. Review the rendered explanation before sharing.
+1. Enter a request in the studio.
+2. A language model creates a lesson plan and storyboard.
+3. The backend validates the plan and generates Python animation code for Manim.
+4. A separate renderer container produces the video.
+5. Preview the result in the studio or download it as an MP4.
 
-Similar-video search is an explicit choice before generating. Read the original request and choose a preview; a match never silently replaces a new generation. Search requires the backend's optional Qdrant configuration. Sharing for reuse starts unchecked and requires the same configuration. Search being unavailable does not prevent an unshared generation.
+The frontend uses Next.js and React. The backend uses FastAPI, SQLite, and Manim. Videos are designed to run for about 5 to 25 seconds, so focused requests work best. Review generated explanations for accuracy before sharing them.
 
-This is a local, single-operator interface. The server key authenticates Next.js to the backend; it does not authenticate visitors to the website. Add visitor authentication, access rules, and rate limits before exposing the frontend publicly.
+## Local setup
 
-## Frontend checks
+### Requirements
+
+- Node.js 22.18 or newer.
+- pnpm. The project specifies version 12.3.4 in `package.json`.
+- Docker with Docker Compose and a running Docker engine.
+- An API key for a supported language model provider: OpenAI, Anthropic, or Google Gemini.
+
+Docker installs the backend's Python, Manim, FFmpeg, and LaTeX dependencies. You do not need to install those separately on your computer.
+
+### 1. Clone the project
+
+```bash
+git clone https://github.com/sksingh2005/manim.git
+cd manim
+```
+
+### 2. Configure the backend
+
+Copy `backend/.env.example` to `backend/.env`. For the default OpenAI configuration, fill in:
+
+```dotenv
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o-mini
+OPENAI_API_KEY=your-openai-api-key
+API_KEY=your-local-backend-key
+```
+
+`API_KEY` is a key you choose for access to the backend. It is separate from your model provider's API key. Leave the other settings at their defaults to start. For another provider, set `LLM_PROVIDER`, `LLM_MODEL`, and its matching API key.
+
+From the repository root, start the backend and renderer:
+
+```bash
+docker compose up --build
+```
+
+The backend runs at `http://127.0.0.1:8000`. Keep this terminal running. The first build can take several minutes because the renderer includes the animation and formula-rendering tools.
+
+### 3. Configure and start the frontend
+
+Copy `.env.example` to `.env.local` in the repository root:
+
+```dotenv
+MANIM_API_URL=http://127.0.0.1:8000
+MANIM_API_KEY=your-local-backend-key
+```
+
+Use the same value for `MANIM_API_KEY` as the backend's `API_KEY`. These settings stay on the server. Keep real keys out of Git and restart the frontend after changing them.
+
+In a second terminal, run:
+
+```bash
+pnpm install
+pnpm dev --hostname 127.0.0.1
+```
+
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000) and choose **Open studio**. Enter a focused request, adjust **Options** if needed, and use the send button to generate a video.
+
+### 4. Stop the project
+
+Press `Ctrl+C` in the frontend terminal. Stop the backend containers with:
+
+```bash
+docker compose down
+```
+
+Job records and rendered videos remain in Docker volumes for the next run.
+
+## Optional services
+
+The basic setup works without cloud storage or video search.
+
+- **Cloudflare R2:** Set the four `R2_*` values in `backend/.env` to upload completed videos.
+- **Similar-video search:** Configure `QDRANT_URL` and a Gemini API key, then start Compose with the `reuse` profile. Sharing is opt-in in the studio.
+
+See the [backend guide](backend/README.md) for provider configuration, API usage, optional services, and rendering limits.
+
+## Development checks
 
 ```bash
 pnpm lint
@@ -29,6 +111,6 @@ pnpm test
 pnpm build
 ```
 
-The proxy tests use Node's built-in test runner and require Node 22.18 or newer. They cover route restrictions, cross-origin submissions, server credentials, backend errors, streaming ranges, and storage redirects.
+The frontend tests cover the backend proxy and use Node's built-in test runner. They do not call a model or generate a video.
 
-For browser checks without model calls, run `node tests/fixture-backend.mjs`, then start a separate frontend with `MANIM_API_URL=http://127.0.0.1:8101`, `MANIM_API_KEY=fixture-key`, and a separate port such as `pnpm dev --port 3100 --hostname 127.0.0.1`. Set those variables only for that test process. The fixture simulates generation stages and plays the first local MP4 in `videos`, if present. Include `fixture-failure` in a prompt to exercise failure handling. Its lesson plans and video are test data, not generated results. Stop the fixture after checking the UI.
+The current setup is intended for local use. Add visitor authentication and rate limits before making the website public.
